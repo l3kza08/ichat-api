@@ -10,6 +10,36 @@ const WebSocket = require('ws');
 
 const port = process.env.PORT || 8080;
 
+// New global variable for persisted users
+const usersFilePath = path.join(__dirname, 'users.json');
+let persistedUsers = new Map(); // Map uid -> user_info
+
+// Function to load users from file
+function loadUsers() {
+  try {
+    if (fs.existsSync(usersFilePath)) {
+      const data = fs.readFileSync(usersFilePath, 'utf8');
+      const parsed = JSON.parse(data);
+      persistedUsers = new Map(Object.entries(parsed));
+      console.log(`Loaded ${persistedUsers.size} persisted users.`);
+    }
+  } catch (e) {
+    console.error('Error loading persisted users:', e.message);
+  }
+}
+
+// Function to save users to file
+function saveUsers() {
+  try {
+    fs.writeFileSync(usersFilePath, JSON.stringify(Object.fromEntries(persistedUsers)), 'utf8');
+  } catch (e) {
+    console.error('Error saving persisted users:', e.message);
+  }
+}
+
+// Call loadUsers on startup
+loadUsers();
+
 // create an HTTP server to serve a simple status page and /status endpoint
 const server = http.createServer((req, res) => {
   // status endpoint
@@ -99,10 +129,11 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    // logging: only log reveal attempts (mask token)
+    // logging: only log reveal attempts (do NOT print token)
     if (auth) {
-      const masked = auth.length > 20 ? auth.slice(0, 8) + '...' + auth.slice(-8) : auth;
-      console.log(`[ice] reveal attempt from ${ip} auth=${masked} revealed=${revealed}`);
+      // don't print token value; only indicate that auth header was provided
+      const prefix = auth.split(' ')[0] || 'auth';
+      console.log(`[ice] reveal attempt from ${ip} auth=${prefix} [REDACTED] revealed=${revealed}`);
     }
 
     if (revealed) {
@@ -144,15 +175,27 @@ const wss = new WebSocket.Server({ server });
 const clients = new Map();
 
 function broadcastUsers() {
-  const users = [];
-  for (const [uid, entry] of clients.entries()) {
-    const info = entry.info || {};
-    users.push({ uid, ...info });
+  const allUsersMap = new Map();
+
+  // Start with all persisted users, mark them offline by default
+  for (const [uid, info] of persistedUsers.entries()) {
+    allUsersMap.set(uid, { ...info, status: info.status || 'offline' });
   }
-  const payload = JSON.stringify({ type: 'users', users });
+
+  // Override/add users who are currently online
+  for (const [uid, entry] of clients.entries()) {
+    // Take the latest info from the client entry (which was set by announce)
+    const onlineUserInfo = { ...(allUsersMap.get(uid) || {}), ...entry.info, status: 'online' };
+    allUsersMap.set(uid, onlineUserInfo);
+  }
+
+  const usersArray = Array.from(allUsersMap.values());
+
+  const payload = JSON.stringify({ type: 'users', users: usersArray });
   for (const [uid, entry] of clients.entries()) {
     try { entry.ws.send(payload); } catch (e) { /* ignore */ }
   }
+  console.log(`Broadcasting ${usersArray.length} users (${clients.size} online).`);
 }
 
 wss.on('connection', function connection(ws, req) {
@@ -166,9 +209,50 @@ wss.on('connection', function connection(ws, req) {
 
     if (type === 'announce' && msg.user && msg.user.uid) {
       const uid = msg.user.uid;
-      clients.set(uid, { ws, info: { name: msg.user.name, email: msg.user.email, photoURL: msg.user.photoURL, username: msg.user.username, status: msg.user.status } });
-      // send current users to everyone
+      const userInfoFromMessage = {
+        name: msg.user.name,
+        email: msg.user.email,
+        photoURL: msg.user.photoPath || msg.user.photoURL,
+        username: msg.user.username,
+        status: msg.user.statusType || 'online',
+        recoveryPhraseHash: msg.user.recoveryPhraseHash, // Add new field
+      };
+
+      // Merge with existing persisted info
+      const existingPersistedInfo = persistedUsers.get(uid) || {};
+      const newInfo = { ...existingPersistedInfo, ...userInfoFromMessage };
+
+      // Clean up undefined values from userInfoFromMessage before merging, to avoid overwriting existing data with undefined
+      Object.keys(newInfo).forEach(key => newInfo[key] === undefined && delete newInfo[key]);
+
+      clients.set(uid, { ws, info: newInfo }); // Update active client with new merged info
+      persistedUsers.set(uid, newInfo); // Update persisted store
+      saveUsers(); // Save to file
+
       broadcastUsers();
+      return;
+    } else if (type === 'request_user_profile' && msg.requestId && msg.recoveryPhraseHash) {
+      const requestId = msg.requestId;
+      const recoveryPhraseHash = msg.recoveryPhraseHash;
+
+      let foundUser = null;
+      for (const [uid, userInfo] of persistedUsers.entries()) {
+        if (userInfo.recoveryPhraseHash === recoveryPhraseHash) {
+          foundUser = { uid, ...userInfo };
+          break;
+        }
+      }
+
+      const responsePayload = {
+        type: 'user_profile_response',
+        requestId: requestId,
+        user: foundUser, // Will be null if not found
+      };
+      try {
+        ws.send(JSON.stringify(responsePayload));
+      } catch (e) {
+        console.error('Error sending user_profile_response:', e.message);
+      }
       return;
     }
 
@@ -203,9 +287,23 @@ wss.on('connection', function connection(ws, req) {
   });
 
   ws.on('close', function close() {
-    // remove any entries referencing this ws
+    let disconnectedUid = null;
+    // Remove any entries referencing this ws and find the disconnected UID
     for (const [uid, entry] of clients.entries()) {
-      if (entry.ws === ws) clients.delete(uid);
+      if (entry.ws === ws) {
+        disconnectedUid = uid;
+        clients.delete(uid);
+        break; // Assuming one ws per uid
+      }
+    }
+
+    if (disconnectedUid && persistedUsers.has(disconnectedUid)) {
+      const user = persistedUsers.get(disconnectedUid);
+      if (user) {
+        user.status = 'offline';
+        persistedUsers.set(disconnectedUid, user);
+        saveUsers(); // Persist the offline status
+      }
     }
     broadcastUsers();
   });
