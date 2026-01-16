@@ -1,0 +1,12 @@
+{
+  "name": "ichat-signaling-server",
+  "version": "0.1.0",
+  "description": "Minimal WebSocket signaling server for iChat P2P testing",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.13.0"
+  }
+}
