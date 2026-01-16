@@ -1,0 +1,101 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Signaling Server Status</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;padding:24px}
+    .card{border:1px solid #ddd;padding:16px;border-radius:8px;max-width:720px}
+    pre{background:#f7f7f7;padding:12px;border-radius:6px;overflow:auto}
+    .ok{color:green}
+    .bad{color:red}
+  </style>
+</head>
+<body>
+  <h1>Signaling Server Status</h1>
+  <div class="card">
+    <div id="status">Loading…</div>
+    <h3>Users / Clients</h3>
+    <div id="clients">-</div>
+    <h3>Raw JSON</h3>
+    <pre id="raw">-</pre>
+    <h3>ICE Servers</h3>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+      <button id="revealBtn">Show sensitive</button>
+      <button id="hideBtn" style="display:none">Hide sensitive</button>
+      <span id="revealStatus" style="font-size:90%;color:#666"></span>
+    </div>
+    <pre id="ice">-</pre>
+  </div>
+
+  <script>
+      const base = '';
+      async function refresh(){
+        try{
+          // status
+          const res = await fetch(base + '/status', {cache:'no-store'});
+          if(!res.ok) throw new Error('HTTP ' + res.status);
+          const json = await res.json();
+          document.getElementById('status').innerHTML = json.status === 'ok' ? '<span class="ok">OK</span> uptime: ' + json.uptime + 's' : '<span class="bad">'+json.status+'</span>';
+          document.getElementById('clients').textContent = json.clients + ' connected';
+          document.getElementById('raw').textContent = JSON.stringify(json, null, 2);
+
+          // ice (masked by default)
+          try {
+            const r2 = await fetch(base + '/ice', {cache:'no-store'});
+            if (r2.ok) {
+              const ice = await r2.json();
+              const out = (ice && ice.iceServers) ? ice.iceServers : ice;
+              document.getElementById('ice').textContent = JSON.stringify(out, null, 2);
+              document.getElementById('revealStatus').textContent = ice.revealed ? 'sensitive shown' : '';
+            } else {
+              document.getElementById('ice').textContent = 'HTTP ' + r2.status;
+            }
+          } catch (ie) {
+            document.getElementById('ice').textContent = 'Error: ' + ie.message;
+          }
+
+        }catch(e){
+          document.getElementById('status').innerHTML = '<span class="bad">Error: '+e.message+'</span>';
+          document.getElementById('clients').textContent = '-';
+          document.getElementById('raw').textContent = String(e);
+          document.getElementById('ice').textContent = '-';
+        }
+      }
+      refresh();
+      setInterval(refresh, 5000);
+
+      // reveal/hide sensitive handlers
+      document.getElementById('revealBtn').addEventListener('click', async () => {
+        const token = prompt('Enter reveal token to show sensitive ICE credentials');
+        if (!token) return;
+        try {
+          const r = await fetch(base + '/ice', {cache:'no-store', headers: { 'Authorization': 'Bearer ' + token }});
+          if (!r.ok) {
+            alert('Unauthorized or error: ' + r.status);
+            return;
+          }
+          const j = await r.json();
+          if (j && j.revealed) {
+            document.getElementById('ice').textContent = JSON.stringify(j.iceServers, null, 2);
+            document.getElementById('revealStatus').textContent = 'sensitive shown';
+            document.getElementById('revealBtn').style.display = 'none';
+            document.getElementById('hideBtn').style.display = 'inline-block';
+          } else {
+            alert('Token rejected');
+          }
+        } catch (e) {
+          alert('Error: ' + e.message);
+        }
+      });
+
+      document.getElementById('hideBtn').addEventListener('click', async () => {
+        // refresh to get masked version
+        await refresh();
+        document.getElementById('revealBtn').style.display = 'inline-block';
+        document.getElementById('hideBtn').style.display = 'none';
+      });
+  </script>
+</body>
+</html>
