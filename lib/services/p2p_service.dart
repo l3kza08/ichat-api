@@ -304,8 +304,13 @@ class P2PService {
   }
 
   Future<void> _createPeerConnection() async {
-    // load ICE servers from config (supports TURN credentials)
-    final iceServers = await IceConfig.instance.getIceServers();
+    // attempt to load ICE servers from signaling endpoint, fallback to prefs
+    final iceServers = await _fetchIceServersFromSignaling() ??
+        await IceConfig.instance.getIceServers();
+    // persist fetched ICE servers for future runs
+    try {
+      await IceConfig.instance.setIceServers(iceServers);
+    } catch (_) {}
     final config = <String, dynamic>{'iceServers': iceServers};
     final constraints = <String, dynamic>{'mandatory': {}, 'optional': []};
     _pc = await createPeerConnection(config, constraints);
@@ -320,6 +325,39 @@ class P2PService {
 
     if (_localStream != null) {
       _pc?.addStream(_localStream!);
+    }
+  }
+
+  /// Try to GET /ice from the signaling server derived from the hardcoded URL.
+  /// Returns null on failure.
+  Future<List<Map<String, dynamic>>?> _fetchIceServersFromSignaling() async {
+    try {
+      // derive http(s) url from ws/wss signaling URL
+      final ws = _hardcodedSignalingUrl;
+      String base;
+      if (ws.startsWith('wss://')) {
+        base = ws.replaceFirst('wss://', 'https://');
+      } else if (ws.startsWith('ws://')) {
+        base = ws.replaceFirst('ws://', 'http://');
+      } else {
+        base = ws;
+      }
+      final uri = Uri.parse(base);
+      final iceUri = uri.replace(path: '/ice');
+      final httpClient = HttpClient();
+      httpClient.connectionTimeout = const Duration(seconds: 6);
+      final req = await httpClient.getUrl(iceUri);
+      final resp = await req.close().timeout(const Duration(seconds: 6));
+      if (resp.statusCode != 200) return null;
+      final body = await resp.transform(utf8.decoder).join();
+      final parsed = jsonDecode(body) as Map<String, dynamic>?;
+      if (parsed == null) return null;
+      final servers = parsed['iceServers'] as List? ?? parsed['ice'] as List?;
+      if (servers == null) return null;
+      return servers.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    } catch (e) {
+      developer.log('Failed to fetch ICE from signaling: $e', name: 'P2PService');
+      return null;
     }
   }
 
