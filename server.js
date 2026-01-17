@@ -4,11 +4,16 @@
 //   npm start
 
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const WebSocket = require('ws');
 
 const port = process.env.PORT || 8080;
+
+// Helper: if SSL cert/key paths are provided via env, try to start HTTPS/WSS
+const sslKeyPath = process.env.SSL_KEY_PATH || null;
+const sslCertPath = process.env.SSL_CERT_PATH || null;
 
 // New global variable for persisted users
 const usersFilePath = path.join(__dirname, 'users.json');
@@ -40,8 +45,24 @@ function saveUsers() {
 // Call loadUsers on startup
 loadUsers();
 
-// create an HTTP server to serve a simple status page and /status endpoint
-const server = http.createServer((req, res) => {
+// create an HTTP or HTTPS server to serve a simple status page and /status endpoint
+let server;
+if (sslKeyPath && sslCertPath && fs.existsSync(sslKeyPath) && fs.existsSync(sslCertPath)) {
+  try {
+    const key = fs.readFileSync(sslKeyPath);
+    const cert = fs.readFileSync(sslCertPath);
+    server = https.createServer({ key, cert }, (req, res) => handleRequest(req, res));
+    console.log('SSL key/cert found; starting HTTPS + WSS server');
+  } catch (e) {
+    console.error('Failed to read SSL key/cert, falling back to HTTP:', e.message);
+    server = http.createServer((req, res) => handleRequest(req, res));
+  }
+} else {
+  server = http.createServer((req, res) => handleRequest(req, res));
+}
+
+// request handler extracted for reuse between http/https
+function handleRequest(req, res) {
   // helper: security headers + json responder
   const securityHeaders = {
     'Content-Security-Policy': "default-src 'none'; style-src 'self' 'unsafe-inline' data:; img-src 'self' data:; script-src 'self' 'unsafe-inline'; connect-src 'self' wss: https:; frame-ancestors 'none'; base-uri 'self'",
@@ -252,7 +273,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, headers);
     stream.pipe(res);
   });
-});
+}
 
 const wss = new WebSocket.Server({ server });
 
@@ -412,6 +433,9 @@ setInterval(() => {
 }, 30000);
 
 server.listen(port, () => {
-  console.log('Signaling server (HTTP+WS) listening on port', port);
+  const addr = server.address();
+  const usedPort = addr && addr.port ? addr.port : port;
+  const proto = (sslKeyPath && sslCertPath) ? 'HTTPS+WSS' : 'HTTP+WS';
+  console.log(`iChat server (${proto}) listening on port ${usedPort}`);
 });
 
