@@ -321,7 +321,7 @@ wss.on('connection', function connection(ws, req) {
         photoURL: msg.user.photoPath || msg.user.photoURL,
         username: msg.user.username,
         status: msg.user.statusType || 'online',
-        recoveryPhraseHash: msg.user.recoveryPhraseHash, // Add new field
+        passwordHash: msg.user.passwordHash,
       };
 
       // Merge with existing persisted info
@@ -337,15 +337,17 @@ wss.on('connection', function connection(ws, req) {
 
       broadcastUsers();
       return;
-    } else if (type === 'request_user_profile' && msg.requestId && msg.recoveryPhraseHash) {
+    } else if (type === 'request_user_profile' && msg.requestId) {
       const requestId = msg.requestId;
-      const recoveryPhraseHash = msg.recoveryPhraseHash;
-
       let foundUser = null;
-      for (const [uid, userInfo] of persistedUsers.entries()) {
-        if (userInfo.recoveryPhraseHash === recoveryPhraseHash) {
-          foundUser = { uid, ...userInfo };
-          break;
+      if (msg.email && msg.passwordHash) {
+        const email = String(msg.email).toLowerCase();
+        const passwordHash = String(msg.passwordHash);
+        for (const [uid, userInfo] of persistedUsers.entries()) {
+          if ((userInfo.email || '').toLowerCase() === email && userInfo.passwordHash === passwordHash) {
+            foundUser = { uid, ...userInfo };
+            break;
+          }
         }
       }
 
