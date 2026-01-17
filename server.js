@@ -137,7 +137,7 @@ function handleRequest(req, res) {
         name: info.name || undefined,
         email: usersRevealed ? (info.email || undefined) : maskEmail(info.email),
         username: usersRevealed ? (info.username || undefined) : maskUsername(info.username),
-        status: info.status || 'offline',
+        status: info.statusType || 'offline', // Use stored statusType
       });
     }
 
@@ -148,7 +148,7 @@ function handleRequest(req, res) {
         name: info.name || undefined,
         email: usersRevealed ? (info.email || undefined) : maskEmail(info.email || (info.email === undefined ? undefined : info.email)),
         username: usersRevealed ? (info.username || undefined) : maskUsername(info.username),
-        status: info.status || 'online',
+        status: info.statusType || 'online', // Use statusType from online user, default to 'online'
       });
       // replace any existing entry for uid
       const idx = shownUsers.findIndex(u => u.uid === uid);
@@ -285,13 +285,21 @@ function broadcastUsers() {
 
   // Start with all persisted users, mark them offline by default
   for (const [uid, info] of persistedUsers.entries()) {
-    allUsersMap.set(uid, { ...info, status: info.status || 'offline' });
+    allUsersMap.set(uid, {
+      ...info,
+      statusType: info.statusType || 'offline', // Use stored statusType
+      online: false, // Mark as offline if not currently connected
+    });
   }
 
   // Override/add users who are currently online
   for (const [uid, entry] of clients.entries()) {
-    // Take the latest info from the client entry (which was set by announce)
-    const onlineUserInfo = { ...(allUsersMap.get(uid) || {}), ...entry.info, status: 'online' };
+    const onlineUserInfo = {
+      ...(allUsersMap.get(uid) || {}),
+      ...entry.info,
+      statusType: entry.info.statusType || 'online', // Use granular statusType from client
+      online: true, // Mark as online
+    };
     allUsersMap.set(uid, onlineUserInfo);
   }
 
@@ -315,14 +323,53 @@ wss.on('connection', function connection(ws, req) {
 
     if (type === 'announce' && msg.user && msg.user.uid) {
       const uid = msg.user.uid;
+      const requestId = msg.requestId; // Client should provide a requestId for the response
       const userInfoFromMessage = {
         name: msg.user.name,
-        email: msg.user.email,
+        email: (msg.user.email || '').toLowerCase(), // Normalize email to lowercase
         photoURL: msg.user.photoPath || msg.user.photoURL,
-        username: msg.user.username,
-        status: msg.user.statusType || 'online',
+        username: (msg.user.username || '').toLowerCase(), // Normalize username to lowercase
+        statusType: msg.user.statusType || 'online',
         passwordHash: msg.user.passwordHash,
       };
+
+      // --- Server-side Uniqueness Validation ---
+      let error = null;
+
+      // Check for duplicate username
+      for (const [existingUid, existingUserInfo] of persistedUsers.entries()) {
+        if (existingUid !== uid && existingUserInfo.username === userInfoFromMessage.username) {
+          error = 'Username already taken.';
+          break;
+        }
+      }
+
+      // Check for duplicate email
+      if (!error) {
+        for (const [existingUid, existingUserInfo] of persistedUsers.entries()) {
+          if (existingUid !== uid && existingUserInfo.email === userInfoFromMessage.email) {
+            error = 'Email already registered.';
+            break;
+          }
+        }
+      }
+
+      if (error) {
+        // Send error response back to the client
+        if (requestId) {
+          try {
+            ws.send(JSON.stringify({
+              type: 'announce_response',
+              requestId: requestId,
+              status: 'error',
+              message: error,
+            }));
+          } catch (e) {
+            console.error('Error sending announce_response:', e.message);
+          }
+        }
+        return; // Stop processing if validation fails
+      }
 
       // Merge with existing persisted info
       const existingPersistedInfo = persistedUsers.get(uid) || {};
@@ -335,31 +382,106 @@ wss.on('connection', function connection(ws, req) {
       persistedUsers.set(uid, newInfo); // Update persisted store
       saveUsers(); // Save to file
 
+      // Send success response back to the client
+      if (requestId) {
+        try {
+          ws.send(JSON.stringify({
+            type: 'announce_response',
+            requestId: requestId,
+            status: 'success',
+            message: 'User announced successfully.',
+          }));
+        } catch (e) {
+          console.error('Error sending announce_response:', e.message);
+        }
+      }
+
       broadcastUsers();
       return;
     } else if (type === 'request_user_profile' && msg.requestId) {
       const requestId = msg.requestId;
+      const requestedUid = msg.uid;
+      const requestedEmail = (msg.email || '').toLowerCase();
+      const requestedPasswordHash = msg.passwordHash;
+
       let foundUser = null;
-      if (msg.email && msg.passwordHash) {
-        const email = String(msg.email).toLowerCase();
-        const passwordHash = String(msg.passwordHash);
+
+      if (requestedUid) {
+        // Lookup by UID
+        foundUser = persistedUsers.get(requestedUid);
+      } else if (requestedEmail && requestedPasswordHash) {
+        // Lookup by email and password hash for login
         for (const [uid, userInfo] of persistedUsers.entries()) {
-          if ((userInfo.email || '').toLowerCase() === email && userInfo.passwordHash === passwordHash) {
+          if (userInfo.email === requestedEmail && userInfo.passwordHash === requestedPasswordHash) {
             foundUser = { uid, ...userInfo };
             break;
           }
         }
       }
 
+      if (foundUser) {
+        // Only send public profile info back, do not send passwordHash back
+        const publicProfile = {
+          uid: foundUser.uid,
+          name: foundUser.name,
+          username: foundUser.username,
+          photoPath: foundUser.photoURL, // Ensure consistency with client's photoPath
+          statusType: foundUser.statusType || 'offline',
+          email: foundUser.email, // Include email for the client to verify
+        };
+        try {
+          ws.send(JSON.stringify({
+            type: 'request_user_profile_response',
+            requestId: requestId,
+            status: 'success',
+            userProfile: publicProfile,
+          }));
+        } catch (e) {
+          console.error('Error sending request_user_profile_response:', e.message);
+        }
+      } else {
+        try {
+          ws.send(JSON.stringify({
+            type: 'request_user_profile_response',
+            requestId: requestId,
+            status: 'error',
+            message: 'User not found or credentials invalid.',
+          }));
+        } catch (e) {
+          console.error('Error sending request_user_profile_response:', e.message);
+        }
+      }
+      return;
+    } else if (type === 'search_users' && msg.requestId && msg.query) {
+      const requestId = msg.requestId;
+      const query = String(msg.query).toLowerCase();
+      const foundUsers = [];
+
+      for (const [uid, userInfo] of persistedUsers.entries()) {
+        const userName = String(userInfo.name || '').toLowerCase();
+        const userUsername = String(userInfo.username || '').toLowerCase();
+
+        if (userName.includes(query) || userUsername.includes(query)) {
+          // Only send public profile info
+          foundUsers.push({
+            uid: uid,
+            name: userInfo.name,
+            username: userInfo.username,
+            photoPath: userInfo.photoURL,
+            statusType: userInfo.status || 'offline', // Use stored status or default
+          });
+        }
+      }
+
       const responsePayload = {
-        type: 'user_profile_response',
+        type: 'search_users_response',
         requestId: requestId,
-        user: foundUser, // Will be null if not found
+        users: foundUsers,
       };
       try {
         ws.send(JSON.stringify(responsePayload));
       } catch (e) {
-        console.error('Error sending user_profile_response:', e.message);
+        console.error('Error sending search_users_response:', e.message);
       }
       return;
     }
@@ -408,7 +530,7 @@ wss.on('connection', function connection(ws, req) {
     if (disconnectedUid && persistedUsers.has(disconnectedUid)) {
       const user = persistedUsers.get(disconnectedUid);
       if (user) {
-        user.status = 'offline';
+        user.statusType = 'offline';
         persistedUsers.set(disconnectedUid, user);
         saveUsers(); // Persist the offline status
       }
