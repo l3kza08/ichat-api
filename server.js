@@ -42,21 +42,105 @@ loadUsers();
 
 // create an HTTP server to serve a simple status page and /status endpoint
 const server = http.createServer((req, res) => {
-  // status endpoint
+  // helper: security headers + json responder
+  const securityHeaders = {
+    'Content-Security-Policy': "default-src 'none'; style-src 'self' 'unsafe-inline' data:; img-src 'self' data:; script-src 'self' 'unsafe-inline'; connect-src 'self' wss: https:; frame-ancestors 'none'; base-uri 'self'",
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'no-referrer',
+  };
+
+  function writeJSON(statusCode, obj, extraHeaders) {
+    const headers = Object.assign({ 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, securityHeaders, extraHeaders || {});
+    res.writeHead(statusCode, headers);
+    res.end(JSON.stringify(obj));
+  }
+
+  // status endpoint (masked)
   if (req.url === '/status') {
-    const users = [];
+    // check for reveal token in Authorization header (reuse ICE_REVEAL_TOKEN if USERS_REVEAL_TOKEN not set)
+    const auth = (req.headers && req.headers.authorization) ? req.headers.authorization : null;
+    const usersRevealToken = process.env.USERS_REVEAL_TOKEN || process.env.ICE_REVEAL_TOKEN || null;
+    let usersRevealed = false;
+    // simple rate-limiting for reveal attempts per IP (reuse _revealAttempts map)
+    const ip = req.headers['x-forwarded-for'] ? String(req.headers['x-forwarded-for']).split(',')[0].trim() : (req.socket && req.socket.remoteAddress) ? req.socket.remoteAddress : 'unknown';
+    if (!global._revealAttempts) global._revealAttempts = new Map();
+    const attempts = global._revealAttempts;
+    const now = Date.now();
+    const windowMs = 60 * 1000; // 1 minute
+    const maxAttempts = 15; // slightly higher for status
+    const entry = attempts.get(ip) || { count: 0, since: now };
+    if (now - entry.since > windowMs) {
+      entry.count = 0;
+      entry.since = now;
+    }
+    if (auth && usersRevealToken) {
+      const parts = auth.split(' ');
+      if (parts.length === 2 && parts[0].toLowerCase() === 'bearer') {
+        const token = parts[1];
+        if (token === usersRevealToken) {
+          usersRevealed = true;
+        } else {
+          entry.count += 1;
+          attempts.set(ip, entry);
+        }
+      }
+    }
+    if (entry.count > maxAttempts) {
+      writeJSON(429, { error: 'Too many attempts' });
+      return;
+    }
+    // mask helper
+    function maskEmail(e) {
+      if (!e || typeof e !== 'string') return undefined;
+      const parts = e.split('@');
+      if (parts.length !== 2) return '[REDACTED]';
+      const local = parts[0];
+      const domain = parts[1];
+      if (local.length <= 1) return '*@' + domain;
+      return local[0] + '***' + local.slice(-1) + '@' + domain;
+    }
+
+    function maskUsername(u) {
+      if (!u || typeof u !== 'string') return undefined;
+      if (u.length <= 2) return '*'.repeat(u.length);
+      return u[0] + '***' + u.slice(-1);
+    }
+
+    const shownUsers = [];
+
+    // include persisted users (offline unless online)
+    for (const [uid, info] of persistedUsers.entries()) {
+      shownUsers.push({
+        uid,
+        name: info.name || undefined,
+        email: usersRevealed ? (info.email || undefined) : maskEmail(info.email),
+        username: usersRevealed ? (info.username || undefined) : maskUsername(info.username),
+        status: info.status || 'offline',
+      });
+    }
+
+    // override/add online users from clients map
     for (const [uid, entry] of clients.entries()) {
       const info = entry.info || {};
-      users.push({ uid, ...info });
+      const merged = Object.assign({ uid }, {
+        name: info.name || undefined,
+        email: usersRevealed ? (info.email || undefined) : maskEmail(info.email || (info.email === undefined ? undefined : info.email)),
+        username: usersRevealed ? (info.username || undefined) : maskUsername(info.username),
+        status: info.status || 'online',
+      });
+      // replace any existing entry for uid
+      const idx = shownUsers.findIndex(u => u.uid === uid);
+      if (idx >= 0) shownUsers[idx] = merged; else shownUsers.push(merged);
     }
+
     const payload = {
       status: 'ok',
       uptime: Math.floor(process.uptime()),
       clients: clients.size,
-      users,
+      users: shownUsers,
     };
-    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
-    res.end(JSON.stringify(payload));
+    writeJSON(200, payload);
     return;
   }
 
@@ -137,13 +221,11 @@ const server = http.createServer((req, res) => {
     }
 
     if (revealed) {
-      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
-      res.end(JSON.stringify({ iceServers: resp, revealed: true }));
+      writeJSON(200, { iceServers: resp, revealed: true });
       return;
     }
 
-    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
-    res.end(JSON.stringify({ iceServers: mask(resp), revealed: false }));
+      writeJSON(200, { iceServers: mask(resp), revealed: false });
     return;
   }
 
@@ -151,20 +233,23 @@ const server = http.createServer((req, res) => {
   let filePath = path.join(__dirname, 'public', req.url === '/' ? 'index.html' : req.url);
   if (!filePath.startsWith(path.join(__dirname, 'public'))) {
     // disallow directory traversal
-    res.writeHead(403);
+    const headers = Object.assign({ 'Content-Type': 'text/plain' }, securityHeaders);
+    res.writeHead(403, headers);
     res.end('Forbidden');
     return;
   }
   fs.stat(filePath, (err, stat) => {
     if (err || !stat.isFile()) {
-      res.writeHead(404);
+      const headers = Object.assign({ 'Content-Type': 'text/plain' }, securityHeaders);
+      res.writeHead(404, headers);
       res.end('Not found');
       return;
     }
     const stream = fs.createReadStream(filePath);
     const ext = path.extname(filePath).toLowerCase();
     const mime = ext === '.html' ? 'text/html' : ext === '.js' ? 'application/javascript' : ext === '.css' ? 'text/css' : 'application/octet-stream';
-    res.writeHead(200, { 'Content-Type': mime });
+    const headers = Object.assign({ 'Content-Type': mime }, securityHeaders);
+    res.writeHead(200, headers);
     stream.pipe(res);
   });
 });
@@ -189,7 +274,7 @@ function broadcastUsers() {
     allUsersMap.set(uid, onlineUserInfo);
   }
 
-  const usersArray = Array.from(allUsersMap.values());
+  const usersArray = Array.from(allUsersMap.entries()).map(([uid, info]) => ({ uid, ...info }));
 
   const payload = JSON.stringify({ type: 'users', users: usersArray });
   for (const [uid, entry] of clients.entries()) {
