@@ -1,0 +1,187 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Signaling Server Status</title>
+  <style>
+    :root{--bg:#f6f8fb;--card:#ffffff;--muted:#6b7280;--accent:#0b5fff}
+    html,body{height:100%}
+    body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;margin:0;padding:28px;background:var(--bg);color:#0f172a}
+    .wrap{max-width:980px;margin:0 auto}
+    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+    h1{font-size:20px;margin:0}
+    .card{background:var(--card);box-shadow:0 6px 18px rgba(12,18,28,0.06);border-radius:12px;padding:18px}
+    .grid{display:grid;grid-template-columns:1fr 320px;gap:16px}
+    pre{background:#f7f9fc;padding:12px;border-radius:8px;overflow:auto;font-size:13px}
+    .ok{color:green}
+    .bad{color:red}
+    table{width:100%;border-collapse:collapse;font-size:14px}
+    th,td{padding:8px 10px;text-align:left;border-bottom:1px solid #eef2f7}
+    th{color:var(--muted);font-size:12px}
+    .controls{display:flex;gap:8px;align-items:center}
+    .btn{background:var(--accent);color:white;padding:8px 10px;border-radius:8px;border:none;cursor:pointer}
+    .btn.ghost{background:transparent;color:var(--accent);border:1px solid rgba(11,95,255,0.12)}
+    input[type="text"]{padding:8px;border-radius:8px;border:1px solid #e6eefb;background:white}
+    .muted{color:var(--muted);font-size:13px}
+  </style>
+</head>
+<body>
+  <h1>Signaling Server Status</h1>
+  <div class="card">
+    <div class="grid">
+      <div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <div>
+            <div id="status">Loading…</div>
+            <div class="muted" id="clients">-</div>
+          </div>
+          <div class="controls">
+            <input id="filter" type="text" placeholder="Filter users..." />
+            <button id="refreshBtn" class="btn ghost">Refresh</button>
+          </div>
+        </div>
+
+        <div style="margin-bottom:12px">
+          <table aria-label="users">
+            <thead>
+              <tr><th>UID</th><th>Name</th><th>Email</th><th>Username</th><th>Status</th></tr>
+            </thead>
+            <tbody id="usersTbody"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+          </table>
+        </div>
+
+        <details>
+          <summary style="cursor:pointer">Raw JSON (masked)</summary>
+          <pre id="raw">-</pre>
+        </details>
+      </div>
+
+      <aside>
+        <h3 style="margin-top:0">ICE Servers</h3>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+          <input id="revealToken" type="text" placeholder="Reveal token" />
+          <button id="revealBtn" class="btn">Reveal</button>
+          <button id="hideBtn" class="btn ghost" style="display:none">Hide</button>
+        </div>
+        <div class="muted" id="revealStatus"></div>
+        <pre id="ice">-</pre>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+      const base = '';
+      function el(id){return document.getElementById(id)}
+
+      function renderUsers(list){
+        const tbody = el('usersTbody');
+        if(!list || list.length===0){ tbody.innerHTML = '<tr><td colspan="5" class="muted">No users</td></tr>'; return }
+        tbody.innerHTML = list.map(u=>`<tr><td style="max-width:180px;word-break:break-all">${u.uid}</td><td>${u.name||''}</td><td>${u.email||''}</td><td>${u.username||''}</td><td>${u.status||''}</td></tr>`).join('');
+      }
+
+      async function refresh(){
+        try{
+          // status
+          const res = await fetch(base + '/status', {cache:'no-store'});
+          if(!res.ok) throw new Error('HTTP ' + res.status);
+          const json = await res.json();
+          el('status').innerHTML = json.status === 'ok' ? '<span class="ok">OK</span> uptime: ' + json.uptime + 's' : '<span class="bad">'+json.status+'</span>';
+          el('clients').textContent = json.clients + ' connected';
+          el('raw').textContent = JSON.stringify(json, null, 2);
+          renderUsers(json.users || []);
+
+          // ice (masked by default)
+          try {
+            const r2 = await fetch(base + '/ice', {cache:'no-store'});
+            if (r2.ok) {
+              const ice = await r2.json();
+              const out = (ice && ice.iceServers) ? ice.iceServers : ice;
+              document.getElementById('ice').textContent = JSON.stringify(out, null, 2);
+              document.getElementById('revealStatus').textContent = ice.revealed ? 'sensitive shown' : '';
+            } else {
+              document.getElementById('ice').textContent = 'HTTP ' + r2.status;
+            }
+          } catch (ie) {
+            document.getElementById('ice').textContent = 'Error: ' + ie.message;
+          }
+
+        }catch(e){
+          el('status').innerHTML = '<span class="bad">Error: '+e.message+'</span>';
+          el('clients').textContent = '-';
+          el('raw').textContent = String(e);
+          el('ice').textContent = '-';
+        }
+      }
+      refresh();
+      setInterval(refresh, 5000);
+
+      // controls
+      el('revealBtn').addEventListener('click', async () => {
+        const token = el('revealToken').value.trim();
+        if (!token) { alert('Enter reveal token'); return }
+        try {
+          // fetch ICE with token
+          const r = await fetch(base + '/ice', {cache:'no-store', headers: { 'Authorization': 'Bearer ' + token }});
+          if (!r.ok) { alert('ICE unauthorized or error: ' + r.status); return }
+          const j = await r.json();
+          if (j && j.revealed) {
+            el('ice').textContent = JSON.stringify(j.iceServers, null, 2);
+            el('revealStatus').textContent = 'sensitive shown';
+          } else { alert('ICE token rejected'); return }
+
+          // fetch status with token to reveal users
+          const s = await fetch(base + '/status', {cache:'no-store', headers: { 'Authorization': 'Bearer ' + token }});
+          if (!s.ok) { alert('Status unauthorized or error: ' + s.status); return }
+          const sj = await s.json();
+          el('raw').textContent = JSON.stringify(sj, null, 2);
+          renderUsers(sj.users || []);
+
+          el('revealBtn').style.display = 'none';
+          el('hideBtn').style.display = 'inline-block';
+        } catch (e) { alert('Error: ' + e.message) }
+      });
+
+      el('hideBtn').addEventListener('click', async () => { await refresh(); el('revealBtn').style.display = 'inline-block'; el('hideBtn').style.display = 'none'; });
+
+      el('refreshBtn').addEventListener('click', refresh);
+      el('filter').addEventListener('input', (e) => {
+        const q = e.target.value.toLowerCase().trim();
+        const raw = JSON.parse(el('raw').textContent || '{}');
+        const list = (raw.users||[]).filter(u => !q || (u.uid && u.uid.toLowerCase().includes(q)) || (u.name && u.name.toLowerCase().includes(q)) || (u.username && u.username.toLowerCase().includes(q)));
+        renderUsers(list);
+      });
+
+      // reveal/hide sensitive handlers
+      document.getElementById('revealBtn').addEventListener('click', async () => {
+        const token = prompt('Enter reveal token to show sensitive ICE credentials');
+        if (!token) return;
+        try {
+          const r = await fetch(base + '/ice', {cache:'no-store', headers: { 'Authorization': 'Bearer ' + token }});
+          if (!r.ok) {
+            alert('Unauthorized or error: ' + r.status);
+            return;
+          }
+          const j = await r.json();
+          if (j && j.revealed) {
+            document.getElementById('ice').textContent = JSON.stringify(j.iceServers, null, 2);
+            document.getElementById('revealStatus').textContent = 'sensitive shown';
+            document.getElementById('revealBtn').style.display = 'none';
+            document.getElementById('hideBtn').style.display = 'inline-block';
+          } else {
+            alert('Token rejected');
+          }
+        } catch (e) {
+          alert('Error: ' + e.message);
+        }
+      });
+
+      document.getElementById('hideBtn').addEventListener('click', async () => {
+        // refresh to get masked version
+        await refresh();
+        document.getElementById('revealBtn').style.display = 'inline-block';
+        document.getElementById('hideBtn').style.display = 'none';
+      });
+  </script>
+</body>
+</html>

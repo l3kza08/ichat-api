@@ -1,0 +1,2 @@
+// Removed temporary Firebase-backed profile screen. Use lib/screens/profile.dart instead.
+

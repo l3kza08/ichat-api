@@ -1,0 +1,33 @@
+{
+  "__note__": "PLACE_YOUR_GOOGLE_SERVICES_JSON_HERE",
+  "description": "This is a placeholder file. Replace its contents with the google-services.json you download from Firebase for your Android app. Do NOT commit real secrets to the repo."
+}
+{
+  "project_info": {
+    "project_number": "734491135323",
+    "project_id": "ichat-50570",
+    "storage_bucket": "ichat-50570.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:734491135323:android:c9ae59483e32a66c0cde7e",
+        "android_client_info": {
+          "package_name": "com.lek.ichat"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyByZGiWGCur8s0T6NAQWJFQaKNLZXelNYk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
