@@ -7,7 +7,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'test_setup.dart';
+// test_setup removed — relying on real platform plugins for integration / device tests
 import 'package:ichat/screens/login.dart';
 import 'package:ichat/screens/signup_screen.dart';
 import 'package:ichat/screens/home.dart';
@@ -20,7 +20,7 @@ import 'package:ichat/main.dart';
 
 void main() {
   testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    initTestEnvironment();
+    // initTestEnvironment removed
     // Build our app and trigger a frame.
     await tester.pumpWidget(const ChatApp());
     // App builds a MaterialApp
@@ -47,7 +47,7 @@ void main() {
 
   group('ChatHome navigation tests', () {
     setUp(() async {
-      initTestEnvironment();
+      // initTestEnvironment removed
       // Ensure a user is logged in for these tests
       // This is a simplified mock for AuthService and P2PService
       // In a real app, you would use proper mocking techniques

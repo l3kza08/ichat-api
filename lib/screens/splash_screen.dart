@@ -4,9 +4,6 @@ import '../services/auth_service.dart';
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
 
-  // When set to true in tests, skip the artificial delay so tests don't leave pending timers.
-  static bool testMode = false;
-
   @override
   State<SplashScreen> createState() => _SplashScreenState();
 }
@@ -19,32 +16,18 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   void _navigateToNextScreen() {
-    // Short delay before navigating; in testMode skip the delay to avoid leaving timers pending.
-    if (SplashScreen.testMode) {
-      () async {
+    // Short delay before navigating.
+    Future.delayed(const Duration(milliseconds: 1400), () async {
+      if (!mounted) return;
+      final remembered = await AuthService.instance.isLoggedIn();
+      if (remembered) {
         if (!mounted) return;
-        final remembered = await AuthService.instance.isLoggedIn();
-        if (remembered) {
-          if (!mounted) return;
-          Navigator.of(context).pushReplacementNamed('/home');
-        } else {
-          if (!mounted) return;
-          Navigator.of(context).pushReplacementNamed('/');
-        }
-      }();
-    } else {
-      Future.delayed(const Duration(milliseconds: 1400), () async {
+        Navigator.of(context).pushReplacementNamed('/home');
+      } else {
         if (!mounted) return;
-        final remembered = await AuthService.instance.isLoggedIn();
-        if (remembered) {
-          if (!mounted) return;
-          Navigator.of(context).pushReplacementNamed('/home');
-        } else {
-          if (!mounted) return;
-          Navigator.of(context).pushReplacementNamed('/');
-        }
-      });
-    }
+        Navigator.of(context).pushReplacementNamed('/');
+      }
+    });
   }
 
   @override

@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'test_setup.dart';
+// test_setup removed — relying on real platform plugins for integration / device tests
 import 'package:ichat/screens/profile.dart';
 import 'package:ichat/services/auth_service.dart';
 import 'package:ichat/services/permission_service.dart';
 
 void main() {
   setUp(() async {
-    initTestEnvironment();
+    // initTestEnvironment removed
     // Ensure a user is "logged in" for ProfileScreen to load correctly
     AuthService.instance.updateCurrentUser(
       UserProfile(uid: 'test_uid', name: 'Test User', username: 'testuser'),

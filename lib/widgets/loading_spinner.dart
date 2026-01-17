@@ -4,9 +4,6 @@ class LoadingSpinner extends StatefulWidget {
   final double size;
   const LoadingSpinner({super.key, this.size = 48});
 
-  // When true in tests, disable continuous animation to allow pumpAndSettle
-  static bool testMode = false;
-
   @override
   State<LoadingSpinner> createState() => _LoadingSpinnerState();
 }
@@ -22,9 +19,7 @@ class _LoadingSpinnerState extends State<LoadingSpinner>
       vsync: this,
       duration: const Duration(milliseconds: 1800),
     );
-    if (!LoadingSpinner.testMode) {
-      _ctrl.repeat();
-    }
+    _ctrl.repeat();
   }
 
   @override
