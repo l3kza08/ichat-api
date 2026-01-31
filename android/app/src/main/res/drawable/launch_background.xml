@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launch splash: colored background with centered app icon -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Background: app primary color -->
+    <item android:drawable="@color/brand_primary" />
+
+    <!-- Centered logo copied from Flutter assets -->
+    <item>
+        <bitmap
+            android:gravity="center"
+            android:src="@mipmap/launch_logo" />
+    </item>
+</layer-list>
